@@ -69,10 +69,9 @@ function renderTemplate<Values extends ReadonlyArray<Placeholder<any, any> | und
 
     const { content, holes } = templateCache.get(template) as TemplateCache
     const fragment = document.importNode(content, true)
-    const wire = persistent(fragment)
 
     if (values.length === 0) {
-      return Fx.succeed(wire)
+      return Fx.succeed(persistent(fragment))
     }
 
     const updates: Array<
@@ -90,9 +89,14 @@ function renderTemplate<Values extends ReadonlyArray<Placeholder<any, any> | und
       if (update) updates.push(update)
     }
 
-    if (updates.length === 0) return Fx.succeed(wire)
+    if (updates.length === 0) return Fx.succeed(persistent(fragment))
 
-    return Fx.skipRepeatsWith(Fx.as(Fx.combineAllDiscard(...updates), wire), strictEqual)
+    let wire: Wire | Node | DocumentFragment
+
+    return Fx.skipRepeatsWith(
+      Fx.map(Fx.combineAllDiscard(...updates), () => wire || (wire = persistent(fragment))),
+      strictEqual,
+    )
   })
 }
 
@@ -149,7 +153,13 @@ function updateNode<R, E>(
           if (newValue.length === 0) nodes = diffChildren(comment, nodes, [], document)
           // or diffed, if these contains nodes or "wires"
           else if (newValue.some((x) => typeof x === 'object'))
-            nodes = diffChildren(comment, nodes, newValue, document)
+            nodes = diffChildren(
+              comment,
+              nodes,
+              // We can't diff null values, so we filter them out
+              newValue.filter((x) => x !== null),
+              document,
+            )
           // in all other cases the content is stringified as is
           else handleNode(String(newValue))
         } else {

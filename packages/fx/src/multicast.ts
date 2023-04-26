@@ -37,36 +37,42 @@ export class MulticastFx<R, E, A> implements Fx<R, E, A>, Sink<never, E, A> {
     // eslint-disable-next-line @typescript-eslint/no-this-alias
     const that = this
 
-    return Effect.onExit(
-      Effect.gen(function* ($) {
-        const context = yield* $(Effect.context<R2>())
-        const observer: MulticastObserver<R2, E, A> = { sink, context }
+    return Effect.gen(function* ($) {
+      const context = yield* $(Effect.context<R2>())
+      const observer: MulticastObserver<R2, E, A> = { sink, context }
 
-        if (observers.push(observer) === 1) {
-          that.fiber = yield* $(Effect.forkDaemon(that.fx.run(that)))
-        }
+      if (observers.push(observer) === 1) {
+        that.fiber = yield* $(Effect.forkDaemon(that.fx.run(that)))
+      }
 
-        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-        yield* $(Fiber.await(that.fiber!))
-      }),
-      () => this.removeSink(sink),
-    )
+      // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+      yield* $(Effect.ensuring(Fiber.await(that.fiber!), that.removeSink(sink)))
+    })
   }
 
   readonly addTrace = (trace: Trace): Fx<R, E, A> => {
-    return multicast(Traced<R, E, A>(this.fx, trace))
+    return Traced<R, E, A>(this.fx, trace)
   }
 
   event(a: A) {
+    if (this.observers.length === 0) {
+      return Effect.unit()
+    }
+
     return Effect.suspend(() =>
       Effect.forEachDiscard(this.observers.slice(0), (observer) => this.runEvent(observer, a)),
     )
   }
 
-  error = (cause: Cause.Cause<E>) =>
-    Effect.suspend(() =>
+  error(cause: Cause.Cause<E>) {
+    if (this.observers.length === 0) {
+      return Effect.unit()
+    }
+
+    return Effect.suspend(() =>
       Effect.forEachDiscard(this.observers.slice(0), (observer) => this.runError(observer, cause)),
     )
+  }
 
   protected runEvent<R>(observer: MulticastObserver<R, E, A>, a: A) {
     return Effect.catchAllCause(
@@ -84,19 +90,23 @@ export class MulticastFx<R, E, A> implements Fx<R, E, A>, Sink<never, E, A> {
 
   protected removeSink(sink: Sink<any, E, A>) {
     return Effect.suspend(() => {
-      const index = this.observers.findIndex((o) => o.sink === sink)
+      const { observers } = this
+
+      if (observers.length === 0) return Effect.unit()
+
+      const index = observers.findIndex((o) => o.sink === sink)
 
       if (index > -1) {
-        this.observers.splice(index, 1)
-      }
+        observers.splice(index, 1)
 
-      if (this.observers.length === 0) {
-        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-        const interrupt = Fiber.interrupt(this.fiber!)
+        if (observers.length === 0) {
+          // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+          const interrupt = Fiber.interrupt(this.fiber!)
 
-        this.fiber = undefined
+          this.fiber = undefined
 
-        return interrupt
+          return interrupt
+        }
       }
 
       return Effect.unit()
